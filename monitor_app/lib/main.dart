@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dart:convert';
+import 'dart:math' as math;
 
 void main() => runApp(const EnergyGridApp());
 
@@ -66,7 +67,7 @@ class _DashboardState extends State<Dashboard> {
             double displayI = (data['i_steady'] ?? 0.0).toDouble();
             double displayW = (data['watts'] ?? 0.0).toDouble().clamp(0.0, 5000.0);
             double displayPF = (data['power_factor'] ?? 0.0).toDouble().abs();
-
+            double phaseAngle = data['phase_angle']?.toDouble() ?? 0.0;
             // Update history for the trend line
             wattsHistory.add(displayW);
             if (wattsHistory.length > 100) wattsHistory.removeAt(0);
@@ -94,18 +95,42 @@ class _DashboardState extends State<Dashboard> {
                   ),
                 ),
 
-                // OSCILLOSCOPE
+                // OSCILLOSCOPE & PHASOR SECTION
                 Expanded(
                   flex: 3,
                   child: Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: CustomPaint(
-                      painter: WavePainter(vPoints, iPoints),
-                      child: Container(),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        // THE NEW PHASOR DIAGRAM
+                        SizedBox(
+                          width: 120,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Text("PHASOR", style: TextStyle(fontSize: 8, color: Colors.white24)),
+                              const SizedBox(height: 10),
+                              AspectRatio(
+                                aspectRatio: 1,
+                                child: CustomPaint(painter: PhasorPainter(phaseAngle)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        
+                        const SizedBox(width: 20),
+
+                        // THE WAVE OSCILLOSCOPE
+                        Expanded(
+                          child: CustomPaint(
+                            painter: WavePainter(vPoints, iPoints),
+                            child: Container(),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-
                 // INTERACTIVE SLIDER
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 10),
@@ -269,6 +294,44 @@ class TrendPainter extends CustomPainter {
     }
     canvas.drawPath(path, paint);
   }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+class PhasorPainter extends CustomPainter {
+  final double angle; // in radians
+  PhasorPainter(this.angle);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2.2;
+    final paintBase = Paint()..color = Colors.white10..style = PaintingStyle.stroke..strokeWidth = 1;
+
+    // 1. Draw Background Circle and Crosshairs
+    canvas.drawCircle(center, radius, paintBase);
+    canvas.drawLine(Offset(center.dx, center.dy - radius), Offset(center.dx, center.dy + radius), paintBase);
+    canvas.drawLine(Offset(center.dx - radius, center.dy), Offset(center.dx + radius, center.dy), paintBase);
+
+    // 2. Voltage Vector (Fixed at 0 degrees / 12 o'clock)
+    final vPaint = Paint()..color = Colors.greenAccent..strokeWidth = 3..strokeCap = StrokeCap.round;
+    canvas.drawLine(center, Offset(center.dx, center.dy - radius), vPaint);
+
+    // 3. Current Vector (Rotates based on angle)
+    // In Flutter, 0 radians is 3 o'clock, so we subtract pi/2 to start at 12 o'clock
+    final double adjustedAngle = angle - (3.14159 / 2); 
+    final iPaint = Paint()..color = Colors.blueAccent..strokeWidth = 3..strokeCap = StrokeCap.round;
+    
+    final iEndPoint = Offset(
+      center.dx + (radius * 0.8) * math.cos(adjustedAngle),
+      center.dy + (radius * 0.8) * math.sin(adjustedAngle),
+    );
+    canvas.drawLine(center, iEndPoint, iPaint);
+    
+    // Add arrow head for Current
+    canvas.drawCircle(iEndPoint, 4, iPaint);
+  }
+
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

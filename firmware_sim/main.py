@@ -62,6 +62,9 @@ async def simulate_grid(websocket):
 
         # Calculate Real Power (Watts)
         watts = v_rms * i_rms * pf
+        # Calculate angle in radians for the Phasor Diagram
+        # 5ms = 1.57 rad (90 degrees)
+        angle_rad = (phase_lag / 0.02) * (2 * math.pi)
 
         # 4. DATA PAYLOAD
         payload = {
@@ -71,8 +74,8 @@ async def simulate_grid(websocket):
             "i_steady": i_rms,
             "watts": watts,
             "power_factor": pf,
-            "lag_value": phase_lag,
-            "motor_on": motor_lag_target > 0.003  # True if load is significant
+            "phase_angle": angle_rad,
+            "motor_on": motor_lag_target > 0.003 # True if load is significant
         }
 
         try:
