@@ -11,10 +11,7 @@ class EnergyGridApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        primaryColor: Colors.blueAccent,
-        scaffoldBackgroundColor: const Color(0xFF050505),
-      ),
+      theme: ThemeData.dark().copyWith(scaffoldBackgroundColor: const Color(0xFF050505)),
       home: const Dashboard(),
     );
   }
@@ -29,212 +26,174 @@ class Dashboard extends StatefulWidget {
 class _DashboardState extends State<Dashboard> {
   final channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8765'));
   
-  // Storage for the Power Trend Chart
+  // App State
+  int _tabIndex = 0;
   List<double> wattsHistory = [];
-  double currentLag = 0.002; // Local state for the slider
+  double currentLag = 0.002;
+  double totalEnergyUsed = 0.0;
+  double electricityRate = 0.15;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text("GRID MONITOR V2", style: TextStyle(fontSize: 14, color: Colors.white24)),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.analytics_outlined, color: Colors.orangeAccent),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => HistoryScreen(data: wattsHistory)),
-              );
-            },
-          )
+      // 1. BOTTOM NAVIGATION BAR
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _tabIndex,
+        onTap: (index) => setState(() => _tabIndex = index),
+        selectedItemColor: Colors.blueAccent,
+        unselectedItemColor: Colors.white24,
+        backgroundColor: Colors.black,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.bolt), label: 'Live Grid'),
+          BottomNavigationBarItem(icon: Icon(Icons.analytics), label: 'Analytics'),
         ],
       ),
       body: StreamBuilder(
         stream: channel.stream,
         builder: (context, snapshot) {
-          if (snapshot.hasData) {
-            final data = jsonDecode(snapshot.data);
-            
-            // 1. WAVE DATA
-            final List<double> vPoints = List<double>.from(data['v_wave']);
-            final List<double> iPoints = List<double>.from(data['i_wave']).map((x) => x * 15).toList();
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-            // 2. METRICS & ALERTS
-            double displayV = (data['v_steady'] ?? 0.0).toDouble();
-            double displayI = (data['i_steady'] ?? 0.0).toDouble();
-            double displayW = (data['watts'] ?? 0.0).toDouble().clamp(0.0, 5000.0);
-            double displayPF = (data['power_factor'] ?? 0.0).toDouble().abs();
-            double phaseAngle = data['phase_angle']?.toDouble() ?? 0.0;
-            // Update history for the trend line
-            wattsHistory.add(displayW);
-            if (wattsHistory.length > 100) wattsHistory.removeAt(0);
+          final data = jsonDecode(snapshot.data);
+          
+          // Data Extraction
+          final List<double> vPoints = List<double>.from(data['v_wave']);
+          final List<double> iPoints = List<double>.from(data['i_wave']).map((x) => x * 15).toList();
+          double displayV = (data['v_steady'] ?? 0.0).toDouble();
+          double displayI = (data['i_steady'] ?? 0.0).toDouble();
+          double displayW = (data['watts'] ?? 0.0).toDouble().clamp(0.0, 5000.0);
+          double displayPF = (data['power_factor'] ?? 0.0).toDouble().abs();
+          double phaseAngle = (data['phase_angle'] ?? 0.0).toDouble();
 
-            return Column(
-              children: [
-                // REFINED STATUS ALERT
-                Container(
-                  margin: const EdgeInsets.symmetric(vertical: 10),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: displayPF < 0.5 ? Colors.red.withOpacity(0.1) : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: displayPF < 0.5 ? Colors.redAccent : (displayPF < 0.8 ? Colors.orange : Colors.greenAccent.withOpacity(0.3)),
-                    ),
-                  ),
-                  child: Text(
-                    displayPF < 0.5 ? "🚨 CRITICAL: LOW POWER FACTOR" : 
-                    displayPF < 0.8 ? "⚠️ WARNING: INEFFICIENT LOAD" : "✅ GRID STABLE",
-                    style: TextStyle(
-                      color: displayPF < 0.5 ? Colors.redAccent : (displayPF < 0.8 ? Colors.orange : Colors.greenAccent),
-                      fontWeight: FontWeight.bold, fontSize: 11,
-                    ),
-                  ),
-                ),
+          // Financial Calculation (50ms slices)
+          totalEnergyUsed += (displayW / 1000) * (0.05 / 3600);
+          wattsHistory.add(displayW);
+          if (wattsHistory.length > 100) wattsHistory.removeAt(0);
 
-                // OSCILLOSCOPE & PHASOR SECTION
-                Expanded(
-                  flex: 3,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Row(
-                      children: [
-                        // THE NEW PHASOR DIAGRAM
-                        SizedBox(
-                          width: 120,
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Text("PHASOR", style: TextStyle(fontSize: 8, color: Colors.white24)),
-                              const SizedBox(height: 10),
-                              AspectRatio(
-                                aspectRatio: 1,
-                                child: CustomPaint(painter: PhasorPainter(phaseAngle)),
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        const SizedBox(width: 20),
-
-                        // THE WAVE OSCILLOSCOPE
-                        Expanded(
-                          child: CustomPaint(
-                            painter: WavePainter(vPoints, iPoints),
-                            child: Container(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                // INTERACTIVE SLIDER
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 10),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text("LOAD MAGNITUDE (PHASE LAG)", style: TextStyle(fontSize: 9, color: Colors.white54)),
-                          Text("${(currentLag * 1000).toStringAsFixed(1)} ms", style: const TextStyle(color: Colors.blueAccent, fontSize: 10)),
-                        ],
-                      ),
-                      Slider(
-                        value: currentLag,
-                        min: 0.002,
-                        max: 0.010,
-                        activeColor: currentLag > 0.006 ? Colors.orangeAccent : Colors.blueAccent,
-                        onChanged: (value) {
-                          setState(() => currentLag = value);
-                          channel.sink.add(value.toString()); // Send to Python
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-
-                // MINI TREND LINE
-                SizedBox(
-                  height: 30,
-                  width: double.infinity,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    child: CustomPaint(painter: TrendPainter(wattsHistory)),
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-                
-                // DATA READOUT
-                Container(
-                  padding: const EdgeInsets.all(25),
-                  decoration: const BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      metric("VOLTAGE", "${displayV.toStringAsFixed(1)}V", Colors.greenAccent),
-                      metric("CURRENT", "${displayI.toStringAsFixed(1)}A", Colors.blueAccent),
-                      metric("POWER", "${displayW.toStringAsFixed(0)}W", displayPF < 0.7 ? Colors.orangeAccent : Colors.white),
-                      metric("P. FACTOR", displayPF.toStringAsFixed(2), displayPF < 0.5 ? Colors.redAccent : Colors.purpleAccent),
-                    ],
-                  ),
-                )
-              ],
-            );
-          }
-          return const Center(child: CircularProgressIndicator(color: Colors.blueAccent));
+          // SWITCHING VIEWS
+          return _tabIndex == 0 
+            ? _buildLiveView(vPoints, iPoints, phaseAngle, displayV, displayI, displayW, displayPF)
+            : _buildAnalyticsView(displayW, displayPF);
         },
       ),
     );
   }
 
-  Widget metric(String label, String val, Color color) {
+  // --- VIEW 1: LIVE GRID (Physics Focused) ---
+  Widget _buildLiveView(List<double> v, List<double> i, double angle, double vS, double iS, double wS, double pfS) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Colors.white24, fontSize: 8)),
-        const SizedBox(height: 4),
-        Text(val, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'Courier')),
+        const SizedBox(height: 50),
+        _buildStatusHeader(pfS),
+        Expanded(
+          flex: 4,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                SizedBox(width: 100, child: CustomPaint(painter: PhasorPainter(angle))),
+                const SizedBox(width: 20),
+                Expanded(child: CustomPaint(painter: WavePainter(v, i))),
+              ],
+            ),
+          ),
+        ),
+        _buildSlider(),
+        _buildMetricsDock(vS, iS, wS, pfS),
       ],
     );
   }
-}
 
-// --- FULL HISTORY SCREEN ---
-class HistoryScreen extends StatelessWidget {
-  final List<double> data;
-  const HistoryScreen({super.key, required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(title: const Text("100-POINT POWER LOG")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text("WATTS OVER TIME", style: TextStyle(color: Colors.orangeAccent, letterSpacing: 2)),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.all(20),
-              width: double.infinity,
-              height: 300,
-              child: CustomPaint(painter: TrendPainter(data)),
-            ),
-            const Padding(
-              padding: EdgeInsets.all(20.0),
-              child: Text("This chart shows the real-time efficiency drops as you adjust the motor load slider.", 
-                textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 12)),
-            ),
-          ],
+  // --- VIEW 2: ANALYTICS (Business Focused) ---
+  Widget _buildAnalyticsView(double watts, double pf) {
+    return Column(
+      children: [
+        const SizedBox(height: 60),
+        const Text("FINANCIAL SUMMARY", style: TextStyle(letterSpacing: 2, color: Colors.white38)),
+        _buildCostCard(),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20),
+          child: Text("POWER TREND (100 SAMPLES)", style: TextStyle(fontSize: 10, color: Colors.white24)),
         ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(30),
+            child: CustomPaint(painter: TrendPainter(wattsHistory)),
+          ),
+        ),
+        _buildEfficiencyInsight(pf),
+      ],
+    );
+  }
+
+  // --- REUSABLE UI COMPONENTS ---
+
+  Widget _buildStatusHeader(double pf) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      child: Text(pf < 0.6 ? "🚨 CRITICAL PHASE SHIFT" : "✅ SYSTEM STABLE",
+          style: TextStyle(color: pf < 0.6 ? Colors.red : Colors.greenAccent, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  Widget _buildSlider() {
+    return Padding(
+      padding: const EdgeInsets.all(30),
+      child: Slider(
+        value: currentLag, min: 0.002, max: 0.010,
+        onChanged: (val) {
+          setState(() => currentLag = val);
+          channel.sink.add(val.toString());
+        },
+      ),
+    );
+  }
+
+  Widget _buildCostCard() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(15)),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text("ENERGY USED", style: TextStyle(fontSize: 10, color: Colors.white38)),
+            Text("${totalEnergyUsed.toStringAsFixed(4)} kWh", style: const TextStyle(fontSize: 18)),
+          ]),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            const Text("TOTAL COST", style: TextStyle(fontSize: 10, color: Colors.white38)),
+            Text("\$${(totalEnergyUsed * electricityRate).toStringAsFixed(3)}", 
+                 style: const TextStyle(fontSize: 24, color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricsDock(double v, double i, double w, double pf) {
+    return Container(
+      padding: const EdgeInsets.all(25),
+      color: Colors.black,
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+        _metric("VOLTS", v.toStringAsFixed(1)),
+        _metric("AMPS", i.toStringAsFixed(1)),
+        _metric("WATTS", w.toStringAsFixed(0)),
+        _metric("PF", pf.toStringAsFixed(2)),
+      ]),
+    );
+  }
+
+  Widget _metric(String label, String val) => Column(children: [
+    Text(label, style: const TextStyle(color: Colors.white24, fontSize: 9)),
+    Text(val, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+  ]);
+
+  Widget _buildEfficiencyInsight(double pf) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Text(
+        pf < 0.8 ? "Tip: Low Power Factor detected. Adding capacitors could reduce energy waste." : "System is running at peak efficiency.",
+        textAlign: TextAlign.center, style: const TextStyle(color: Colors.white38, fontSize: 12),
       ),
     );
   }
