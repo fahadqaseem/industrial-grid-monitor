@@ -4,73 +4,94 @@ import json
 import math
 import time
 
-# Add this variable at the very top of your file (below the imports)
-motor_active = False
+# Global variable to track the phase lag (controlled by the Flutter slider)
+# Default 0.002 represents a high-efficiency load
+motor_lag_target = 0.002
 
 
 async def simulate_grid(websocket):
-    global motor_active
+    global motor_lag_target
     start_time = time.time()
 
-    # This task listens for the Flutter button click
+    # Listen for slider data or commands from Flutter
     async def listen_for_commands():
-        global motor_active
+        global motor_lag_target
         async for message in websocket:
-            if message == "TOGGLE_MOTOR":
-                motor_active = not motor_active
-                print(f"Motor state changed: {motor_active}")
+            try:
+                # If Flutter sends "TOGGLE_MOTOR", we jump between two states
+                if message == "TOGGLE_MOTOR":
+                    motor_lag_target = 0.006 if motor_lag_target == 0.002 else 0.002
+                else:
+                    # Otherwise, treat the message as a raw float from the Slider
+                    val = float(message)
+                    # Safety clamp: 2ms to 10ms lag
+                    motor_lag_target = max(0.002, min(0.010, val))
+            except ValueError:
+                pass
 
-    # Start listening in the background
+    # Start the listener in the background
     asyncio.create_task(listen_for_commands())
 
-    # Replace your while True loop logic in main.py
     while True:
-        elapsed = time.time() - start_time
-        phase_lag = 0.006 if motor_active else 0.002
+        # 1. PHYSICS CONSTANTS
+        v_peak = 230
+        i_peak = 10
+        phase_lag = motor_lag_target
 
-        # Generate a full snapshot (2 cycles)
+        # 2. GENERATE HIGH-RES SNAPSHOT (200 points for smooth curves)
         v_wave = []
         i_wave = []
-        v_wave = []
-        i_wave = []
-        resolution = 200  # More points = smoother curves
+        resolution = 200
         for step in range(resolution):
-            # t still covers 2 full cycles (0.04s)
+            # t covers 2 full cycles at 50Hz (0.04 seconds)
             t = step * (0.04 / resolution)
-            v_val = 230 * math.sin(2 * math.pi * 50 * t)
-            i_val = 10 * math.sin(2 * math.pi * 50 * (t - phase_lag))
+            v_val = v_peak * math.sin(2 * math.pi * 50 * t)
+            i_val = i_peak * math.sin(2 * math.pi * 50 * (t - phase_lag))
             v_wave.append(v_val)
             i_wave.append(i_val)
 
-        # Steady values (calculated once per frame)
-        v_rms = 230 / math.sqrt(2)
-        i_rms = 10 / math.sqrt(2)
-        pf = math.cos(2 * math.pi * 50 * phase_lag)
+        # 3. STEADY CALCULATIONS (RMS and Power Factor)
+        # RMS = Peak / sqrt(2)
+        v_rms = v_peak * 0.707
+        i_rms = i_peak * 0.707
 
+        # Calculate Power Factor: cos(phi)
+        # At 50Hz, 0.02s = 360 degrees (2*pi radians)
+        angle_rad = (phase_lag / 0.02) * (2 * math.pi)
+        pf = abs(math.cos(angle_rad))
+
+        # Calculate Real Power (Watts)
+        watts = v_rms * i_rms * pf
+
+        # 4. DATA PAYLOAD
         payload = {
             "v_wave": v_wave,
             "i_wave": i_wave,
             "v_steady": v_rms,
             "i_steady": i_rms,
-            "watts": v_rms * i_rms * pf,
+            "watts": watts,
             "power_factor": pf,
-            "motor_on": motor_active
+            "lag_value": phase_lag,
+            "motor_on": motor_lag_target > 0.003  # True if load is significant
         }
 
-        await websocket.send(json.dumps(payload))
-        await asyncio.sleep(0.05)  # Refresh the whole screen 20 times a second
+        try:
+            await websocket.send(json.dumps(payload))
+        except websockets.ConnectionClosed:
+            break
+
+        # Refresh rate: 20fps for a stable UI
+        await asyncio.sleep(0.05)
+
 
 async def main():
-    # This creates and starts the server in the modern way
     async with websockets.serve(simulate_grid, "localhost", 8765):
-        print("Industrial Grid Server started on ws://localhost:8765")
-        await asyncio.Future()  # This keeps the server running forever
+        print("Variable Load Grid Server started on ws://localhost:8765")
+        await asyncio.Future()  # Run forever
+
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Server stopped by user")
-
-        # Inside your while True loop in main.py:
-
+        print("\nServer stopped by user.")
